@@ -7,3 +7,12 @@ jobs:
         steps:
             - name: Setting an error message
               run: echo "::error::Missing semicolon"
+            - name: Groups of logs
+              run: |
+                echo "::group:: My group title"
+                echo "Inside group"
+                echo "::endgroup::"
+            - name: Masking a value
+              run: "echo ::add-mask::Secret String"
+            - name: Echo a secret
+              run: echo "Secret String"
