@@ -1,8 +1,7 @@
 name: Stale issues & PRs
 on:
     schedule:
-        - cron: "* 14 * * *"
-        - cron: "0/5 * * * *"
+        - cron: "*/5 * * * *"
 jobs:
     stale:
         runs-on: ubuntu-latest
