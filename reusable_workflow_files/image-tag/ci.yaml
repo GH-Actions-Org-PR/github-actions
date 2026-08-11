@@ -1,0 +1,42 @@
+name: Go CI
+
+on:
+
+  push:
+    branches:
+      - main
+
+jobs:
+
+  build:
+
+    uses: ./.github/workflows/reusable-build.yml
+
+    permissions:
+      contents: read
+      packages: write
+
+    with:
+      go-version: "1.24"
+      image-name: ghcr.io/my-org/payment-service
+
+    secrets:
+      ghcr-token: ${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+
+    needs: build
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Print Image
+        run: |
+          echo "Image from reusable workflow:"
+          echo "${{ needs.build.outputs.image-tag }}"
+
+      - name: Deploy
+        run: |
+          kubectl set image deployment/payment \
+          payment=${{ needs.build.outputs.image-tag }}

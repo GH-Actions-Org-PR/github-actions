@@ -1,0 +1,52 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+
+jobs:
+  # PRs and pushes to main run tests/build but never deploy.
+  ci:
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/reusable-ci-cd.yml
+    with:
+      environment: staging
+      image-name: ghcr.io/${{ github.repository }}
+      run-deploy: false
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+  # Merges to main auto-deploy to staging.
+  deploy-staging:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/reusable-ci-cd.yml
+    with:
+      environment: staging
+      image-name: ghcr.io/${{ github.repository }}
+      run-deploy: true
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Version tags (v1.2.3) deploy to production; the "production" GitHub
+  # Environment should have required reviewers configured for a manual gate.
+  deploy-production:
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/reusable-ci-cd.yml
+    with:
+      environment: production
+      image-name: ghcr.io/${{ github.repository }}
+      run-deploy: true
+      aws-region: us-east-1
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN_PROD }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

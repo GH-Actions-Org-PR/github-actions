@@ -1,0 +1,48 @@
+name: "Setup Environment"
+description: "Installs Node.js, restores caches, and installs dependencies deterministically"
+
+inputs:
+  node-version:
+    description: "Node.js version to install"
+    required: false
+    default: "20.x"
+  working-directory:
+    description: "Directory containing package.json"
+    required: false
+    default: "."
+
+outputs:
+  cache-hit:
+    description: "Whether the dependency cache was restored"
+    value: ${{ steps.cache-deps.outputs.cache-hit }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Resolve cache key
+      id: cache-key
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "hash=${{ hashFiles('**/package-lock.json') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore dependency cache
+      id: cache-deps
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.npm
+          ${{ inputs.working-directory }}/node_modules
+        key: npm-${{ runner.os }}-${{ inputs.node-version }}-${{ steps.cache-key.outputs.hash }}
+        restore-keys: |
+          npm-${{ runner.os }}-${{ inputs.node-version }}-
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npm ci --prefer-offline --no-audit --no-fund

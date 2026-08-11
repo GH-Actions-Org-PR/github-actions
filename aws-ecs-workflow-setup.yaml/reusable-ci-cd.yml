@@ -1,0 +1,307 @@
+name: Reusable CI/CD Pipeline
+
+# ---------------------------------------------------------------------------
+# This workflow is meant to be CALLED by other workflows via `workflow_call`.
+# It is not meant to run on its own push/PR events - see caller-example.yml
+# for how a repo (or another repo entirely) invokes this.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target deploy environment (staging | production)"
+        type: string
+        required: true
+      node-version:
+        description: "Node.js version matrix base"
+        type: string
+        required: false
+        default: "20.x"
+      image-name:
+        description: "Container image name, e.g. ghcr.io/org/app"
+        type: string
+        required: true
+      run-deploy:
+        description: "Whether to run the deploy job (false for PR builds)"
+        type: boolean
+        required: false
+        default: false
+      aws-region:
+        description: "AWS region for deployment"
+        type: string
+        required: false
+        default: "us-east-1"
+    secrets:
+      REGISTRY_USERNAME:
+        required: true
+      REGISTRY_PASSWORD:
+        required: true
+      AWS_ROLE_ARN:
+        required: true
+      SLACK_WEBHOOK_URL:
+        required: false
+    outputs:
+      image-digest:
+        description: "Digest of the published image"
+        value: ${{ jobs.build.outputs.digest }}
+
+# Least-privilege default; individual jobs escalate only what they need.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref, but never cancel a production deploy.
+concurrency:
+  group: ci-cd-${{ inputs.environment }}-${{ github.ref }}
+  cancel-in-progress: ${{ inputs.environment != 'production' }}
+
+env:
+  CI: "true"
+  NODE_OPTIONS: "--max-old-space-size=4096"
+
+jobs:
+  # -------------------------------------------------------------------------
+  lint:
+    name: Lint & static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-env
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Run ESLint
+        run: npm run lint -- --format=json --output-file=eslint-report.json
+        continue-on-error: true
+
+      - name: Run Prettier check
+        run: npm run format:check
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eslint-report
+          path: eslint-report.json
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  test:
+    name: Test (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node-version: ["18.x", "20.x", "22.x"]
+        include:
+          - os: macos-latest
+            node-version: "20.x"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-env
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Run unit tests
+        run: npm run test:unit -- --coverage --reporter=json --outputFile=test-results.json
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          DATABASE_URL: "postgres://postgres:postgres@localhost:5432/test"
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.os }}-${{ matrix.node-version }}
+          path: coverage/
+          retention-days: 7
+
+      - name: Publish coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.node-version == '20.x'
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: false
+
+  # -------------------------------------------------------------------------
+  security:
+    name: Security scanning
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-fs-results.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy results to Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-results.sarif
+
+  # -------------------------------------------------------------------------
+  build:
+    name: Build & push image
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.image-name }}
+          tags: |
+            type=sha,prefix=,format=short
+            type=ref,event=branch
+            type=raw,value=${{ inputs.environment }}
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          sbom: true
+          provenance: true
+
+      - name: Scan built image
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ inputs.image-name }}@${{ steps.push.outputs.digest }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  # -------------------------------------------------------------------------
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    needs: build
+    if: inputs.run-deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Environment protection rules (required reviewers, wait timers) are
+    # configured once in Settings > Environments and enforced automatically.
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.deploy.outputs.url }}
+    permissions:
+      contents: read
+      id-token: write # required for OIDC federation to AWS
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Deploy new task definition
+        id: deploy
+        run: |
+          set -euo pipefail
+          IMAGE="${{ inputs.image-name }}@${{ needs.build.outputs.digest }}"
+          echo "Deploying $IMAGE to ${{ inputs.environment }}"
+
+          aws ecs update-service \
+            --cluster "app-${{ inputs.environment }}" \
+            --service "app-service" \
+            --force-new-deployment \
+            --query 'service.serviceArn' --output text
+
+          aws ecs wait services-stable \
+            --cluster "app-${{ inputs.environment }}" \
+            --services "app-service"
+
+          echo "url=https://${{ inputs.environment }}.example.com" >> "$GITHUB_OUTPUT"
+
+      - name: Run smoke tests
+        run: |
+          curl -sSf --retry 5 --retry-delay 5 \
+            "https://${{ inputs.environment }}.example.com/healthz"
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          echo "Deployment failed - rolling back to previous task definition"
+          aws ecs update-service \
+            --cluster "app-${{ inputs.environment }}" \
+            --service "app-service" \
+            --task-definition "$(aws ecs describe-services \
+              --cluster app-${{ inputs.environment }} \
+              --services app-service \
+              --query 'services[0].deployments[1].taskDefinition' --output text)"
+
+  # -------------------------------------------------------------------------
+  notify:
+    name: Notify status
+    needs: [deploy]
+    if: always() && inputs.run-deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          STATUS="${{ needs.deploy.result }}"
+          COLOR="good"; [ "$STATUS" != "success" ] && COLOR="danger"
+          curl -sSf -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"attachments\":[{\"color\":\"$COLOR\",\"text\":\"Deploy to ${{ inputs.environment }}: $STATUS (run: ${{ github.run_id }})\"}]}"
