@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - unused
+    - gosec
+    - bodyclose
+    - gocritic
+    - revive
+
+  settings:
+    gosec:
+      excludes:
+        - G104 # errcheck already covers unhandled errors
+
+run:
+  timeout: 5m
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

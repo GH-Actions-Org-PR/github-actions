@@ -1,0 +1,22 @@
+name: Test Hello World Action
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  greet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Points at the action's folder in this same repo. If this action
+      # lived in its own repo instead, this would be
+      # "your-org/hello-world-action@v1" like a normal marketplace action.
+      - id: hello
+        uses: ./hello-world-action
+        with:
+          who-to-greet: "Preetu"
+
+      - run: echo "Greeted at ${{ steps.hello.outputs.time }}"
