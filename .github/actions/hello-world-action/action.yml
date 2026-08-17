@@ -19,6 +19,8 @@ runs:
   # registry first. (The alternative, like your example, is
   # image: 'docker://some/published-image:tag' to pull a prebuilt one.)
   image: "Dockerfile"
+  args:
+    - ${{ inputs.who-to-greet }}
   # No `args:` needed - GitHub automatically injects every input as an
   # env var named INPUT_<NAME>, which is what main.go reads. `args:`
   # would additionally pass values as CLI arguments (os.Args) if you

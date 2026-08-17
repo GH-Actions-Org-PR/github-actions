@@ -11,7 +11,7 @@ func main() {
 	// INPUT_<NAME_UPPERCASED_WITH_UNDERSCORES>. The input "who-to-greet"
 	// in action.yml becomes INPUT_WHO-TO-GREET normalized to
 	// INPUT_WHO_TO_GREET.
-	who := os.Getenv("INPUT_WHO_TO_GREET")
+	who := os.Args[1]
 	if who == "" {
 		who = "World"
 	}
