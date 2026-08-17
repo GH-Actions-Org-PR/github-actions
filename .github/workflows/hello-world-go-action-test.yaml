@@ -15,7 +15,7 @@ jobs:
       # lived in its own repo instead, this would be
       # "your-org/hello-world-action@v1" like a normal marketplace action.
       - id: hello
-        uses: ./hello-world-action
+        uses: ./.github/actions/hello-world-action
         with:
           who-to-greet: "Preetu"
 
