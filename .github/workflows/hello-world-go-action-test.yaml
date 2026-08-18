@@ -19,4 +19,5 @@ jobs:
         with:
           who-to-greet: "Preetu"
 
-      - run: echo "Greeted at ${{ steps.hello.outputs.time }}"
+      - name: Show greeting time 
+        run: echo "Greeting time ${{ steps.hello.outputs.time }}"
