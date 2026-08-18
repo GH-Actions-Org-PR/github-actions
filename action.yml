@@ -25,3 +25,7 @@ runs:
   # env var named INPUT_<NAME>, which is what main.go reads. `args:`
   # would additionally pass values as CLI arguments (os.Args) if you
   # preferred that style instead.
+
+branding:
+  icon: "terminal"
+  color: "blue"
